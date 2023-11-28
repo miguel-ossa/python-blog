@@ -10,9 +10,9 @@ from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.orm import relationship
 from forms import CreatePostForm, RegisterForm, LoginForm, CommentForm
-# Optional: add contact me email functionality (Day 60)
-# import smtplib
+from doubleLinkedList import DoubleLinkedList
 
+# TODO: implementar older posts
 
 '''
 Make sure the required packages are installed: 
@@ -27,7 +27,6 @@ pip3 install -r requirements.txt
 This will install the packages from the requirements.txt for this project.
 '''
 
-
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_KEY')
 ckeditor = CKEditor(app)
@@ -36,6 +35,8 @@ Bootstrap5(app)
 # Configure Flask-Login
 login_manager = LoginManager()
 login_manager.init_app(app)
+
+DLL = DoubleLinkedList()
 
 
 @login_manager.user_loader
@@ -114,8 +115,11 @@ def admin_only(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # If id is not 1 then return abort with 403 error
-        if current_user.id != 1:
-            return abort(403)
+        try:
+            if current_user.id != 1:
+                return abort(403)
+        except AttributeError:
+            return "Nice try!"
         # Otherwise continue with the route function
         return f(*args, **kwargs)
 
@@ -130,10 +134,11 @@ def register():
 
         # Check if user email is already present in the database.
         result = db.session.execute(db.select(User).where(User.email == form.email.data))
+
         user = result.scalar()
         if user:
             # User already exists
-            flash("You've already signed up with that email, log in instead!")
+            flash("Já se inscreveu com esse e-mail, inicie sessão em vez disso!")
             return redirect(url_for('login'))
 
         hash_and_salted_password = generate_password_hash(
@@ -151,6 +156,7 @@ def register():
         # This line will authenticate the user with Flask-Login
         login_user(new_user)
         return redirect(url_for("get_all_posts"))
+
     return render_template("register.html", form=form, current_user=current_user)
 
 
@@ -164,11 +170,11 @@ def login():
         user = result.scalar()
         # Email doesn't exist
         if not user:
-            flash("That email does not exist, please try again.")
+            flash("Esse e-mail não existe, por favor tente novamente.")
             return redirect(url_for('login'))
         # Password incorrect
         elif not check_password_hash(user.password, password):
-            flash('Password incorrect, please try again.')
+            flash('Palavra-passe incorrecta, tente novamente.')
             return redirect(url_for('login'))
         else:
             login_user(user)
@@ -187,19 +193,33 @@ def logout():
 def get_all_posts():
     result = db.session.execute(db.select(BlogPost))
     posts = result.scalars().all()
+    # Append all elements from the list to the double linked list
+    DLL.erase_all_data()
+    [DLL.append(item) for item in posts]
+
     return render_template("index.html", all_posts=posts, current_user=current_user)
 
 
 # Add a POST method to be able to post comments
+# @app.route("/post/<int:post_id>", methods=["GET", "POST"])
 @app.route("/post/<int:post_id>", methods=["GET", "POST"])
 def show_post(post_id):
     requested_post = db.get_or_404(BlogPost, post_id)
+    # Get the node for this post
+    node = DLL.get(requested_post)
+    next_post = None
+    prev_post = None
+    if node is not None:
+        if node.next_node is not None:
+            next_post = node.next_node.data.id
+        if node.prev_node is not None:
+            prev_post = node.prev_node.data.id
     # Add the CommentForm to the route
     comment_form = CommentForm()
     # Only allow logged-in users to comment on posts
     if comment_form.validate_on_submit():
         if not current_user.is_authenticated:
-            flash("You need to login or register to comment.")
+            flash("É necessário fazer login ou registar-se para comentar.")
             return redirect(url_for("login"))
 
         new_comment = Comment(
@@ -209,7 +229,9 @@ def show_post(post_id):
         )
         db.session.add(new_comment)
         db.session.commit()
-    return render_template("post.html", post=requested_post, current_user=current_user, form=comment_form)
+
+    return render_template("post.html", post=requested_post, next_post=next_post, prev_post=prev_post,
+                           current_user=current_user, form=comment_form)
 
 
 # Use a decorator so only an admin user can create new posts
@@ -229,6 +251,7 @@ def add_new_post():
         db.session.add(new_post)
         db.session.commit()
         return redirect(url_for("get_all_posts"))
+
     return render_template("make-post.html", form=form, current_user=current_user)
 
 
@@ -251,6 +274,7 @@ def edit_post(post_id):
         post.body = edit_form.body.data
         db.session.commit()
         return redirect(url_for("show_post", post_id=post.id))
+
     return render_template("make-post.html", form=edit_form, is_edit=True, current_user=current_user)
 
 
@@ -268,6 +292,7 @@ def delete_post(post_id):
 def about():
     return render_template("about.html", current_user=current_user)
 
+
 @app.route("/donate")
 def donate():
     return render_template("donativos.html", current_user=current_user)
@@ -276,29 +301,6 @@ def donate():
 @app.route("/contact", methods=["GET", "POST"])
 def contact():
     return render_template("contact.html", current_user=current_user)
-
-# Optional: You can include the email sending code from Day 60:
-# DON'T put your email and password here directly! The code will be visible when you upload to GitHub.
-# Use environment variables instead (Day 35)
-
-# MAIL_ADDRESS = os.environ.get("EMAIL_KEY")
-# MAIL_APP_PW = os.environ.get("PASSWORD_KEY")
-
-# @app.route("/contact", methods=["GET", "POST"])
-# def contact():
-#     if request.method == "POST":
-#         data = request.form
-#         send_email(data["name"], data["email"], data["phone"], data["message"])
-#         return render_template("contact.html", msg_sent=True)
-#     return render_template("contact.html", msg_sent=False)
-#
-#
-# def send_email(name, email, phone, message):
-#     email_message = f"Subject:New Message\n\nName: {name}\nEmail: {email}\nPhone: {phone}\nMessage:{message}"
-#     with smtplib.SMTP("smtp.gmail.com") as connection:
-#         connection.starttls()
-#         connection.login(MAIL_ADDRESS, MAIL_APP_PW)
-#         connection.sendmail(MAIL_ADDRESS, MAIL_APP_PW, email_message)
 
 
 if __name__ == "__main__":
